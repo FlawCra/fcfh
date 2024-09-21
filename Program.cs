@@ -2,7 +2,6 @@
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Windows.Forms;
 
 namespace fcfh
 {
@@ -99,14 +98,6 @@ namespace fcfh
         static void Main(string[] args)
         {
             //Always ignore UI mode if arguments are provided
-            if (args.Length == 0 && !Tools.HasConsole())
-            {
-                Tools.FreeConsole();
-                Application.SetCompatibleTextRenderingDefault(false);
-                Application.EnableVisualStyles();
-                Application.Run(new frmMain());
-                return;
-            }
             if (args.Length == 0 || args.Contains("/?"))
             {
                 ShowHelp();

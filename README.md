@@ -6,8 +6,7 @@ This application encodes information into images so they can be uploaded to 4cha
 
 ## Usage
 
-This application can be used with a GUI or a console.
-It detects the appropriate mode automatically.
+This application can only be used with a console.
 
 ### Command line arguments
 
@@ -148,13 +147,6 @@ Fcfh can decode in header mode as well as pixel mode.
 Decoding detects the type of encoding automatically (prefers header mode over pixel mode).
 You only need to know if it was encrypted or not.
 
-#### GUI
-
-The GUI can decode header and pixel mode at the same time.
-It will detect encryption automatically and prompt for a password if necessary.
-
-Note: The password is not stored. You will be prompted individually for each encrypted file.
-
 ## Encryption
 
 You can store content encrypted.
@@ -282,5 +274,4 @@ Not necessarily in order
 - [X] Implement Encryption component
 - [X] Implement Decryption component
 - [X] Implement Command line switches
-- [X] GUI
 - [X] Publish (some sort of) standard

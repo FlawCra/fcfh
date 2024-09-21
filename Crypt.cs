@@ -1,5 +1,4 @@
 ﻿//If you want to use this on linux, remove the #define statement
-#define FASTHASH
 using System;
 using System.IO;
 using System.Linq;

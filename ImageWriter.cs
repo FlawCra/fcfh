@@ -1,11 +1,11 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Drawing;
-using System.Drawing.Imaging;
+﻿using System.Text;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Formats.Png;
+using SixLabors.ImageSharp.Formats.Bmp;
 using System.IO;
-using System.Linq;
-using System.Runtime.InteropServices;
-using System.Text;
+using System.Collections.Generic;
+using System;
 
 namespace fcfh
 {
@@ -25,7 +25,7 @@ namespace fcfh
             {
                 get
                 {
-                    return FileName == null && Data == null;
+                    return string.IsNullOrEmpty(FileName) && (Data == null || Data.Length == 0);
                 }
             }
 
@@ -44,7 +44,6 @@ namespace fcfh
         /// </summary>
         public static class HeaderMode
         {
-
             /// <summary>
             /// Header name
             /// </summary>
@@ -182,9 +181,9 @@ namespace fcfh
                 {
                     var Data = Tools.ReadAll(InputFile);
                     Headers.Insert(1, new PNGHeader(HeaderName,
-                        Encoding.Default.GetBytes(MAGIC)
-                        .Concat(BitConverter.GetBytes(Tools.IntToNetwork(Encoding.Default.GetByteCount(FileName))))
-                        .Concat(Encoding.Default.GetBytes(FileName))
+                        Encoding.UTF8.GetBytes(MAGIC)
+                        .Concat(BitConverter.GetBytes(Tools.IntToNetwork(Encoding.UTF8.GetByteCount(FileName))))
+                        .Concat(Encoding.UTF8.GetBytes(FileName))
                         .Concat(BitConverter.GetBytes(Tools.IntToNetwork(Data.Length)))
                         .Concat(Data)
                         .ToArray()));
@@ -235,52 +234,74 @@ namespace fcfh
                 }
                 byte[] AllData = Tools.ReadAll(Input);
                 byte[] Data =
-                    //Header
+                    // Header
                     Encoding.UTF8.GetBytes(MAGIC)
-                    //File name length
+                    // File name length (big-endian)
                     .Concat(BitConverter.GetBytes(Tools.IntToNetwork(Encoding.UTF8.GetByteCount(FileName))))
-                    //File name
+                    // File name
                     .Concat(Encoding.UTF8.GetBytes(FileName))
-                    //Data length
+                    // Data length (big-endian)
                     .Concat(BitConverter.GetBytes(Tools.IntToNetwork(AllData.Length)))
-                    //Data
+                    // Data
                     .Concat(AllData)
-                    //Make array
+                    // Make array
                     .ToArray();
 
                 var W = (int)Math.Sqrt(Data.Length / BYTES_PER_PIXEL);
-                //Width must be a multiple of 4
+                // Width must be a multiple of 4
                 W -= W % 4;
                 var H = (int)Math.Ceiling(Data.Length / (double)BYTES_PER_PIXEL / W);
 
-                //The way W and H are created the image should be a square
-
-                using (var B = new Bitmap(W, H, PixelFormat.Format24bppRgb))
+                using (var image = new SixLabors.ImageSharp.Image<Rgb24>(W, H))
                 {
-                    var Locker = B.LockBits(new Rectangle(0, 0, W, H), ImageLockMode.WriteOnly, PixelFormat.Format24bppRgb);
+                    byte[] DataArray = Data; // Ensure consistent naming
 
-                    if (!AllowDirectDecode)
+                    int dataLength = DataArray.Length;
+                    int maxDataLength = W * H * BYTES_PER_PIXEL;
+
+                    // Ensure we don't exceed the image capacity
+                    if (dataLength > maxDataLength)
                     {
-                        //In case of PNG we just write data "as-is"
-                        Marshal.Copy(Data, 0, Locker.Scan0, Data.Length);
+                        throw new ArgumentException("Data is too large to fit in the generated image.");
                     }
-                    else
+
+                    // Write pixel data using ProcessPixelRows
+                    image.ProcessPixelRows(accessor =>
                     {
-                        var Pos = Locker.Scan0 + (Locker.Stride * (Locker.Height - 1));
-                        //For BMP we need to write the rows in reverse
-                        for (var i = 0; i < Data.Length; i += Locker.Stride)
+                        int dataIndex = 0;
+
+                        for (int y = 0; y < accessor.Height; y++)
                         {
-                            Marshal.Copy(Data, i, Pos, Locker.Stride < Data.Length - i ? Locker.Stride : Data.Length - i);
-                            Pos -= Locker.Stride;
+                            Span<Rgb24> pixelRow = accessor.GetRowSpan(y);
+
+                            for (int x = 0; x < accessor.Width; x++)
+                            {
+                                if (dataIndex + 2 >= DataArray.Length)
+                                    break; // Prevent overflow if Data.Length exceeds pixel capacity
+
+                                byte r = DataArray[dataIndex++];
+                                byte g = (dataIndex < DataArray.Length) ? DataArray[dataIndex++] : (byte)0;
+                                byte b = (dataIndex < DataArray.Length) ? DataArray[dataIndex++] : (byte)0;
+
+                                pixelRow[x] = new Rgb24(r, g, b);
+                            }
+
+                            if (dataIndex >= DataArray.Length)
+                                break;
                         }
-                    }
+                    });
 
-                    B.UnlockBits(Locker);
-
-                    using (var MS = new MemoryStream())
+                    using (var ms = new MemoryStream())
                     {
-                        B.Save(MS, PNG ? ImageFormat.Png : ImageFormat.Bmp);
-                        return MS.ToArray();
+                        if (PNG)
+                        {
+                            image.Save(ms, new PngEncoder());
+                        }
+                        else
+                        {
+                            image.Save(ms, new BmpEncoder());
+                        }
+                        return ms.ToArray();
                     }
                 }
             }
@@ -290,47 +311,67 @@ namespace fcfh
             /// </summary>
             /// <param name="Input"></param>
             /// <returns></returns>
-            public static ImageFile CreateFileFromImage(Stream Input)
+            public static ImageFile CreateFileFromImage(Stream Input, bool AllowDirectDecode = false)
             {
-                using (Bitmap B = (Bitmap)Image.FromStream(Input))
+                using (var image = Image.Load<Rgb24>(Input))
                 {
-                    var Locker = B.LockBits(new Rectangle(0, 0, B.Width, B.Height), ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
-                    byte[] Data = new byte[Locker.Stride * Locker.Height];
-                    Marshal.Copy(Locker.Scan0, Data, 0, Data.Length);
-                    if ((new string(Data.Take(6).Select(m => (char)m).ToArray())) != MAGIC)
+                    // Calculate the total number of bytes to copy
+                    int totalBytes = image.Width * image.Height * BYTES_PER_PIXEL; // 3 bytes per pixel
+                    byte[] Data = new byte[totalBytes];
+
+                    // Copy pixel data into the byte array
+                    image.CopyPixelDataTo(Data);
+
+                    // Check MAGIC
+                    string magic = Encoding.UTF8.GetString(Data, 0, MAGIC.Length);
+                    if (magic != MAGIC)
                     {
-                        //Data is not in Order because BMP.
-                        int Pos = Locker.Stride * Locker.Height - Locker.Stride;
-                        using (var TempMS = new MemoryStream())
+                        if (!AllowDirectDecode)
                         {
-                            while (Pos >= 0)
+                            // Data might be in reverse order if BMP was used
+                            Array.Reverse(Data);
+                            magic = Encoding.UTF8.GetString(Data, 0, MAGIC.Length);
+
+                            if (magic != MAGIC)
                             {
-                                TempMS.Write(Data, Pos, Locker.Stride);
-                                Pos -= Locker.Stride;
+                                return new ImageFile(); // Returns default with nulls
                             }
-                            Data = TempMS.ToArray();
+                        }
+                        else
+                        {
+                            return new ImageFile(); // Returns default with nulls
                         }
                     }
-                    if ((new string(Data.Take(6).Select(m => (char)m).ToArray())) == MAGIC)
+
+                    // Parse the encoded data
+                    try
                     {
-                        //Data is in order now, get actual payload length
-                        var FileName = Encoding.UTF8.GetString(Data, 10, Tools.IntToHost(BitConverter.ToInt32(Data, 6)));
-                        var Offset = Tools.IntToHost(BitConverter.ToInt32(Data, 6)) + 6 + 4;
-                        var DataLen = Tools.IntToHost(BitConverter.ToInt32(Data, Offset));
-                        ImageFile IF = new ImageFile()
+                        int offset = MAGIC.Length;
+                        int fileNameLength = Tools.IntToHost(BitConverter.ToInt32(Data, offset));
+                        offset += 4;
+
+                        string FileName = Encoding.UTF8.GetString(Data, offset, fileNameLength);
+                        offset += fileNameLength;
+
+                        int dataLength = Tools.IntToHost(BitConverter.ToInt32(Data, offset));
+                        offset += 4;
+
+                        byte[] fileData = new byte[dataLength];
+                        Array.Copy(Data, offset, fileData, 0, dataLength);
+
+                        return new ImageFile
                         {
-                            Data = Data.Skip(Offset + 4).Take(DataLen).ToArray(),
-                            FileName = FileName
+                            FileName = FileName,
+                            Data = fileData
                         };
-                        B.UnlockBits(Locker);
-                        return IF;
                     }
-                    //Even after reordering, there is no encoded pixel data
-                    B.UnlockBits(Locker);
-                    return default(ImageFile);
+                    catch
+                    {
+                        return new ImageFile(); // Returns default with nulls
+                    }
                 }
             }
-
         }
+        
     }
 }
